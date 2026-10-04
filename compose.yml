@@ -1,0 +1,54 @@
+name: endfield-resource-service
+
+services:
+  exporter:
+    image: endfield-resource-service-exporter:latest
+    init: true
+    platform: linux/amd64
+    build:
+      context: .
+    environment:
+      TZ: Asia/Shanghai
+      ENDFIELD_SERVICE_CONFIG_PATH: /run/private/service.json
+      ZMD_VERSION: ${ZMD_VERSION:-}
+      ZMD_THREADS: ${ZMD_THREADS:-1}
+      ZMD_MAX_MEMORY_GB: ${ZMD_MAX_MEMORY_GB:-4}
+      ZMD_EXPORT_STAGES: ${ZMD_EXPORT_STAGES:-masterdata textures audio video raw}
+    # Allow more CPU time without increasing file/codec concurrency or memory.
+    # OrbStack bind-mount metadata overhead also consumes host resources.
+    cpus: 1.0
+    mem_limit: 4g
+    pids_limit: 256
+    shm_size: ${ZMD_CONTAINER_SHM_SIZE:-768m}
+    volumes:
+      - ${ENDFIELD_SERVICE_CONFIG_PATH:-./config/service.json}:/run/private/service.json:ro
+      - ${ZMD_DATA_ROOT:-./data}:/data
+    healthcheck:
+      disable: true
+  endfield-service:
+    image: endfield-resource-service-exporter:latest
+    build:
+      context: .
+    init: true
+    platform: linux/amd64
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      ENDFIELD_SERVICE_CONFIG_PATH: /run/private/service.json
+      ENDFIELD_POLL_SECONDS: ${ENDFIELD_POLL_SECONDS:-300}
+      ENDFIELD_RETRY_SECONDS: ${ENDFIELD_RETRY_SECONDS:-3600}
+      ENDFIELD_DOWNLOAD_WORKERS: ${ENDFIELD_DOWNLOAD_WORKERS:-1}
+      ENDFIELD_EXPORT_THREADS: ${ENDFIELD_EXPORT_THREADS:-1}
+      ENDFIELD_PRESERVE_VFS: ${ENDFIELD_PRESERVE_VFS:-0}
+      ZMD_PATCH_MEMORY_MB: ${ZMD_PATCH_MEMORY_MB:-1536}
+    cpus: 0.25
+    mem_limit: 4g
+    pids_limit: 256
+    shm_size: ${ZMD_CONTAINER_SHM_SIZE:-768m}
+    volumes:
+      - ${ENDFIELD_SERVICE_CONFIG_PATH:-./config/service.json}:/run/private/service.json:ro
+      - ${ZMD_DATA_ROOT:-./data}:/data
+      - ${ZMD_BARK_SKILL_ROOT:-./config/bark}:/opt/bark-skill:ro
+    command: ["/app/scripts/container-service.sh"]
+    healthcheck:
+      disable: true
