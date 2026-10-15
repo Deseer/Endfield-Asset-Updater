@@ -26,6 +26,9 @@ public static class VfsParser
             }
         }
 
+        // The CRC is not part of the serialized records, even when verification
+        // is disabled by a caller.
+        span = span.Slice(0, data.Length - 4);
         int cursor = 0;
 
         int rawVersion = ReadI32Le(span, ref cursor);
@@ -42,6 +45,9 @@ public static class VfsParser
             version = rawVersion;
         }
 
+        if (codeVersion is < 3 or > 5)
+            throw new InvalidDataException($"Unsupported VFS index code version {codeVersion}; supported versions are 3, 4 and 5");
+
         int groupCfgNameLen = ReadU16Le(span, ref cursor);
         string groupCfgName = ReadString(span, ref cursor, groupCfgNameLen);
         long groupCfgHashName = ReadI64Le(span, ref cursor);
@@ -50,6 +56,7 @@ public static class VfsParser
         BlockType blockType = BlockTypes.FromByte(ReadU8(span, ref cursor));
         int chunkCount = ReadI32Le(span, ref cursor);
 
+        ValidateCount(span, cursor, chunkCount, codeVersion >= 5 ? 53 : codeVersion == 4 ? 49 : 45, "chunk");
         var chunks = new List<ChunkInfo>(chunkCount);
         for (int ci = 0; ci < chunkCount; ci++)
         {
@@ -61,7 +68,7 @@ public static class VfsParser
             FileTag mainTag;
             if (codeVersion > 3)
             {
-                int tagRaw = ReadI32Le(span, ref cursor);
+                long tagRaw = codeVersion >= 5 ? ReadI64Le(span, ref cursor) : ReadI32Le(span, ref cursor);
                 mainTag = BlockTypes.FileTagFromByte(unchecked((byte)tagRaw));
             }
             else
@@ -70,6 +77,7 @@ public static class VfsParser
             }
 
             int fileCount = ReadI32Le(span, ref cursor);
+            ValidateCount(span, cursor, fileCount, codeVersion >= 5 ? 68 : codeVersion == 4 ? 64 : 60, "file");
             var files = new List<FileInfo>(fileCount);
 
             for (int fi = 0; fi < fileCount; fi++)
@@ -88,7 +96,7 @@ public static class VfsParser
                 FileTag fileTag;
                 if (codeVersion > 3)
                 {
-                    int tagRaw = ReadI32Le(span, ref cursor);
+                    long tagRaw = codeVersion >= 5 ? ReadI64Le(span, ref cursor) : ReadI32Le(span, ref cursor);
                     fileTag = BlockTypes.FileTagFromByte(unchecked((byte)tagRaw));
                 }
                 else
@@ -135,8 +143,21 @@ public static class VfsParser
         };
     }
 
+    private static void EnsureAvailable(ReadOnlySpan<byte> span, int cursor, int length)
+    {
+        if (length < 0 || cursor < 0 || cursor > span.Length || length > span.Length - cursor)
+            throw new InvalidDataException($"Truncated VFS index at offset {cursor}: need {length} bytes (index length {span.Length})");
+    }
+
+    private static void ValidateCount(ReadOnlySpan<byte> span, int cursor, int count, int minimumSize, string kind)
+    {
+        if (count < 0 || count > (span.Length - cursor) / minimumSize)
+            throw new InvalidDataException($"Invalid VFS {kind} count {count} at offset {cursor}; index is truncated or its format is unsupported");
+    }
+
     private static int ReadI32Le(ReadOnlySpan<byte> span, ref int cursor)
     {
+        EnsureAvailable(span, cursor, 4);
         var v = BinaryPrimitives.ReadInt32LittleEndian(span.Slice(cursor, 4));
         cursor += 4;
         return v;
@@ -144,6 +165,7 @@ public static class VfsParser
 
     private static long ReadI64Le(ReadOnlySpan<byte> span, ref int cursor)
     {
+        EnsureAvailable(span, cursor, 8);
         var v = BinaryPrimitives.ReadInt64LittleEndian(span.Slice(cursor, 8));
         cursor += 8;
         return v;
@@ -151,6 +173,7 @@ public static class VfsParser
 
     private static ushort ReadU16Le(ReadOnlySpan<byte> span, ref int cursor)
     {
+        EnsureAvailable(span, cursor, 2);
         var v = BinaryPrimitives.ReadUInt16LittleEndian(span.Slice(cursor, 2));
         cursor += 2;
         return v;
@@ -158,6 +181,7 @@ public static class VfsParser
 
     private static byte ReadU8(ReadOnlySpan<byte> span, ref int cursor)
     {
+        EnsureAvailable(span, cursor, 1);
         var v = span[cursor];
         cursor += 1;
         return v;
@@ -165,6 +189,7 @@ public static class VfsParser
 
     private static UInt128 ReadU128Le(ReadOnlySpan<byte> span, ref int cursor)
     {
+        EnsureAvailable(span, cursor, 16);
         var v = BinaryPrimitives.ReadUInt128LittleEndian(span.Slice(cursor, 16));
         cursor += 16;
         return v;
@@ -172,6 +197,7 @@ public static class VfsParser
 
     private static string ReadString(ReadOnlySpan<byte> span, ref int cursor, int len)
     {
+        EnsureAvailable(span, cursor, len);
         if (len == 0) return "";
         var slice = span.Slice(cursor, len);
         cursor += len;
